@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tic Tac Toe Multiplayer</title>
+
+<!-- CSS Styling -->
+<style>
+html,body{
+  margin:0; padding:0; height:100%; width:100%; 
+  font-family:sans-serif; 
+  display:flex; justify-content:center; align-items:center; 
+  background:linear-gradient(135deg,#1a1f38,#0d1327 60%,#2c1b47);
+  color:white;
+}
+.container{
+  max-width:500px; width:100%; 
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+}
+#playerID{ font-weight:bold; color:#60a5fa; margin-bottom:10px; }
+.board{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:5px; width:100%;
+}
+.cell{
+  aspect-ratio:1/1; font-size:12vw; background: rgba(255,255,255,0.08); 
+  border-radius:10px; display:flex; justify-content:center; align-items:center; cursor:pointer;
+}
+.cell.x{ color:#60a5fa; }
+.cell.o{ color:#fb7185; }
+.status{ margin-top:5px; font-size:16px; }
+#chatContainer{ width:100%; display:flex; flex-direction:column; gap:5px; }
+#chatBox{ height:150px; overflow-y:auto; background:#111; padding:8px; border-radius:8px; }
+#chatInput{ width:calc(100% - 60px); padding:6px; border-radius:6px; border:none; }
+#chatSend{ padding:6px 10px; border:none; border-radius:6px; background:#ffd166; color:black; cursor:pointer; }
+#popup{ position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); display:flex; justify-content:center; align-items:center; visibility:hidden; }
+#popup.show{ visibility:visible; }
+#popup .popup-box{ background: #0f172a; padding:20px; border-radius:12px; text-align:center; }
+#popup button{ margin-top:10px; padding:6px 10px; border:none; border-radius:6px; cursor:pointer; background:#ffd166; color:black; font-weight:bold; }
+#soundToggle{ margin-top:10px; padding:6px 10px; border:none; border-radius:6px; cursor:pointer; background:#60a5fa; color:white; font-weight:bold; }
+</style>
+
+<!-- Firebase Scripts -->
+<script type="module" src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js"></script>
+<script type="module" src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js"></script>
+
+</head>
+<body>
+
+<div class="container">
+  <h2>Tic Tac Toe Multiplayer</h2>
+  <p id="playerID">Your ID: <span id="myID"></span></p>
+  <input type="text" id="joinID" placeholder="Enter Player ID to join">
+  <button id="joinBtn">Send Join Request</button>
+
+  <div class="board" id="board">
+    <div class="cell" data-index="0"></div>
+    <div class="cell" data-index="1"></div>
+    <div class="cell" data-index="2"></div>
+    <div class="cell" data-index="3"></div>
+    <div class="cell" data-index="4"></div>
+    <div class="cell" data-index="5"></div>
+    <div class="cell" data-index="6"></div>
+    <div class="cell" data-index="7"></div>
+    <div class="cell" data-index="8"></div>
+  </div>
+
+  <div class="status" id="status">Waiting for opponent...</div>
+
+  <div id="chatContainer">
+    <div id="chatBox"></div>
+    <div style="display:flex; gap:5px;">
+      <input type="text" id="chatInput" placeholder="Type message">
+      <button id="chatSend">Send</button>
+    </div>
+  </div>
+
+  <button id="soundToggle">Sound: ON</button>
+</div>
+
+<div id="popup">
+  <div class="popup-box">
+    <h2 id="popupMessage"></h2>
+    <button id="popupBtn">OK</button>
+  </div>
+</div>
+
+<audio id="clickSound" src="https://www.soundjay.com/button/sounds/button-16.mp3" preload="auto"></audio>
+
+<script type="module">
+
+// Import Firebase modules
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+import { getDatabase, ref, set, onValue, update, push } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
+
+// Firebase config – Replace with your project details
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "SENDER_ID",
+  appId: "APP_ID"
+};
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// Persistent Player ID
+let myUserID = localStorage.getItem('ticTacToeUserID');
+if(!myUserID){
+    myUserID = 'user-'+Math.floor(Math.random()*100000);
+    localStorage.setItem('ticTacToeUserID', myUserID);
+}
+document.getElementById('myID').innerText = myUserID;
+
+// Game Variables
+let roomID = myUserID;
+let board = Array(9).fill(null);
+let mySymbol = 'X';
+let currentPlayer = 'X';
+let running = false;
+const cells = document.querySelectorAll('.cell');
+const statusEl = document.getElementById('status');
+const popup = document.getElementById('popup');
+const popupMessage = document.getElementById('popupMessage');
+const popupBtn = document.getElementById('popupBtn');
+const clickSound = document.getElementById('clickSound');
+const soundToggleBtn = document.getElementById('soundToggle');
+let soundOn = true;
+
+// Play click sound
+function playClickSound(){ if(soundOn){ clickSound.currentTime=0; clickSound.play().catch(()=>{}); } }
+
+// Render board
+function renderBoard(data){ board=data||board; cells.forEach((cell,i)=>cell.textContent=board[i]||''); }
+
+// Check winner
+function checkWin(){ 
+  const WIN = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  for(const c of WIN){ const [a,b,c1]=c; if(board[a]&&board[a]===board[b]&&board[a]===board[c1]) return board[a]; }
+  return null;
+}
+
+// End game popup
+function handleEnd(winner){ running=false; popupMessage.textContent='🎉 Player '+winner+' Wins!'; popup.classList.add('show'); }
+
+// Send move
+function sendMove(idx){
+  if(!running||board[idx]) return;
+  if(currentPlayer!==mySymbol) return;
+  board[idx]=mySymbol; playClickSound();
+  update(ref(db,'rooms/'+roomID+'/board'), board);
+}
+
+// Listen to board and chat updates
+function startListening(){
+  // Board
+  onValue(ref(db,'rooms/'+roomID+'/board'), snapshot=>{
+    const data = snapshot.val() || Array(9).fill(null);
+    board = data;
+    renderBoard(board);
+    const winner = checkWin();
+    if(winner){ handleEnd(winner); return; }
+    currentPlayer = (board.filter(v=>v).length%2===0)?'X':'O';
+    statusEl.textContent = `Player ${currentPlayer}'s turn`;
+  });
+  // Chat
+  onValue(ref(db,'rooms/'+roomID+'/chat'), snapshot=>{
+    const messages = snapshot.val()||{};
+    const chatBox = document.getElementById('chatBox'); chatBox.innerHTML='';
+    Object.keys(messages).sort().forEach(k=>{
+      const m = messages[k];
+      chatBox.innerHTML+=`<p><b>${m.user}:</b> ${m.message}</p>`;
+    });
+    chatBox.scrollTop=chatBox.scrollHeight;
+  });
+}
+
+// Chat send
+document.getElementById('chatSend').addEventListener('click', ()=>{
+  const msg=document.getElementById('chatInput').value.trim();
+  if(msg==='') return;
+  const chatRef = push(ref(db,'rooms/'+roomID+'/chat'));
+  set(chatRef,{user:myUserID,message:msg});
+  document.getElementById('chatInput').value='';
+});
+
+// Send join request
+document.getElementById('joinBtn').addEventListener('click', ()=>{
+  const joinID = document.getElementById('joinID').value.trim();
+  if(!joinID) return alert('Enter valid ID');
+
+  const reqRef = ref(db,'rooms/' + joinID + '/requests/' + myUserID);
+  set(reqRef,{from:myUserID,status:'pending'});
+  alert("Join request sent! Waiting for Player to accept...");
+
+  onValue(reqRef, snapshot=>{
+    const req = snapshot.val();
+    if(req && req.status==='accepted'){
+      roomID = joinID; mySymbol='O'; startListening();
+      alert('Player accepted! Game start.');
+    } else if(req && req.status==='rejected'){
+      alert('Player rejected your request.');
+    }
+  });
+});
+
+// Listen incoming requests
+const myReqRef = ref(db,'rooms/' + myUserID + '/requests');
+onValue(myReqRef, snapshot=>{
+  const requests = snapshot.val();
+  if(requests){
+    for(const key in requests){
+      const req = requests[key];
+      if(req.status==='pending'){
+        const accept = confirm(`Player ${req.from} wants to join. Accept?`);
+        if(accept){
+          update(ref(db,'rooms/' + myUserID + '/requests/' + key), {status:'accepted'});
+          update(ref(db,'rooms/' + myUserID), {playerO: req.from});
+          roomID = myUserID; mySymbol='X'; startListening();
+        } else {
+          update(ref(db,'rooms/' + myUserID + '/requests/' + key), {status:'rejected'});
+        }
+      }
+    }
+  }
+});
+
+// Sound toggle
+soundToggleBtn.addEventListener('click',()=>{
+  soundOn = !soundOn;
+  soundToggleBtn.textContent = 'Sound: '+(soundOn?'ON':'OFF');
+});
+
+// Popup close
+popupBtn.addEventListener('click', ()=>{ popup.classList.remove('show'); });
+
+// Board click
+cells.forEach(cell=>cell.addEventListener('click',()=>sendMove(cell.dataset.index)));
+
+</script>
+</body>
+</html>
